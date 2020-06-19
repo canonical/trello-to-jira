@@ -24,13 +24,17 @@ failed_conversion   = 0
 # Lot of Hardcoding for now
 # The Goal is to get all the cards from Trello Board A and import then into JIRA Project J
 
-# src_trello_board = "Foundations Backlog"
-src_trello_board = "THE Board"
+src_trello_board = "Foundations Backlog"
 dest_jira_project= "FS"
 
+# This Label means this is an Epic
+epic_label = "Roadmap Item"
+epic_name_field = 'customfield_10011'
+epic_parent_filed = 'customfield_10014'
 
-# In our current model Lanes will become components
+# If your  current model has Lanes for components
 # The dictionnary below maps substring of current Trello lane to component into JIRA
+# Components need to exist in JIRA
 lanes_to_components = { "General Distro":"Distro",
                         "Netplan":"netplan",
                         "Subiquity":"subiquity",
@@ -42,7 +46,14 @@ lanes_to_components = { "General Distro":"Distro",
                         "Secure":"Secure Boot",
                         "Ubuntu Image":"Ubuntu Image",
                         "System":"systemd"}
- 
+
+# If your  current model has Labels set for components
+# The dictionnary below will maps Trello labels to components into JIRA
+# Components need to exist in JIRA
+labels_to_components = {} 
+
+# What versions in Trello as label need to be mapped to actual versions 
+# Versions need to exists in the Target JIRA project
 labels_to_versions = [  "20.04",
                         "20.04.1",
                         "20.04.2",
@@ -69,26 +80,6 @@ jira = jira_api()
 trello_client = TrelloClient(api_key=trello.key,token=trello.token)
 jira_client = JIRA(jira.server,basic_auth=(jira.login,jira.token))
 
-
-def remove_and_add(search_str,in_list,target_list,new_str=""):
-    if search_str in in_list:
-        in_list.pop(in_list.index(search_str))
-        if new_str:
-            target_list.append(new_str)
-        else:
-            target_list.append(search_str)
- 
-def handle_checklist(card):
-    clists = card.checklists
-    # There could be multiple checklist or no checklist
-    if clists:
-        for clist in clists:
-            # print(clist.name)
-            for item in clist.items:
-                # Looks like this item is not done yet
-                if not item['checked']:
-                    print(" * {}".format(item['name']))
-
 def convert_to_jira(card):
     global skipped_cards, converterd_cards, failed_conversion
 
@@ -110,22 +101,31 @@ def convert_to_jira(card):
     jira_item_description = card.description
 
     jira_item_type = "Task"
-    if "Roadmap Item" in card_labels:
+    if epic_label in card_labels:
         jira_item_type = "Epic"
+        card_labels.remove(epic_label)
 
-    # Figure out version based labels and remove label
+    # Figure out component based on lane 
     jira_item_components = []
-    for key in lanes_to_components:
-        if key in the_board_lanes[card.list_id]:
-            jira_item_components.append({"name":lanes_to_components[key]})        
-
+    if lanes_to_components:
+        for key in lanes_to_components:
+            if key in the_board_lanes[card.list_id]:
+                jira_item_components.append({"name":lanes_to_components[key]})        
+    
+    # Figure out component based on label and remove label
+    if labels_to_components:
+        for component in labels_to_components:
+            if component in card_labels:
+                card_labels.remove(component)
+                jira_item_components.append({"name":component})
 
     # Figure out version based labels and remove label
     jira_item_versions = []
-    for version in labels_to_versions:
-        if version in card_labels:
-            card_labels.remove(version)
-            jira_item_versions.append({"name":version})
+    if labels_to_versions:
+        for version in labels_to_versions:
+            if version in card_labels:
+                card_labels.remove(version)
+                jira_item_versions.append({"name":version})
 
     # Label Clean up
     for label in labels_cleanup:
@@ -178,57 +178,60 @@ def convert_to_jira(card):
         #importing labels
         issue_dict["labels"] = card_labels
 
-        # try:
-        new_issue = jira_client.create_issue(fields=issue_dict)
+        try:
+            new_issue = jira_client.create_issue(fields=issue_dict)
 
-        # importing attachments
-        attachments = card.attachments 
-        if attachments:
-            for url in attachments:
-                link = {'url':url['url'],'title':url['name']}
-                jira_client.add_simple_link(new_issue,object=link)
+            # importing attachments
+            attachments = card.attachments 
+            if attachments:
+                for url in attachments:
+                    link = {'url':url['url'],'title':url['name']}
+                    jira_client.add_simple_link(new_issue,object=link)
 
-        # importing comments            
-        comments = card.comments
-        # There could be multiple comments or no comments
-        if comments:
-            for comment in comments:
-                jira_client.add_comment(new_issue,"{} on {} :\n{}".format(
-                    comment['memberCreator']['fullName'],
-                    comment['date'][:10],
-                    comment['data']['text']))
-        
-        # Creating subtasks if needed
-        clists = card.checklists
-        # There could be multiple checklist or no checklist
-        if clists:
-            # Only deal with with first checlist (majority of our cards)
-            children=[]
-            for item in clists[0].items:
-                # Looks like this item is not done yet
-                if not item['checked']:
-                    subissue_dict = {
-                        'project': dest_jira_project,
-                        'summary': item['name'],
-                        'issuetype': {'name':'Sub-task'},
-                        'parent' : {'key':new_issue.key},
-                        'customfield_10031' : jira_item_id,
-                        'components' : jira_item_components,
-                        'fixVersions' : jira_item_versions,
-                        'labels' : card_labels
-                    }
-                    children.append(subissue_dict)
+            # importing comments            
+            comments = card.comments
+            # There could be multiple comments or no comments
+            if comments:
+                for comment in comments:
+                    jira_client.add_comment(new_issue,"{} on {} :\n{}".format(
+                        comment['memberCreator']['fullName'],
+                        comment['date'][:10],
+                        comment['data']['text']))
+            
+            # Creating subtasks if needed
+            clists = card.checklists
+            # There could be multiple checklist or no checklist
+            if clists:
+                # Only deal with with first checlist (majority of our cards)
+                children=[]
+                for item in clists[0].items:
+                    # Looks like this item is not done yet
+                    if not item['checked']:
+                        subissue_dict = {
+                            'project': dest_jira_project,
+                            'summary': item['name'],
+                            'customfield_10031' : jira_item_id,
+                            'components' : jira_item_components,
+                            'fixVersions' : jira_item_versions,
+                            'labels' : card_labels
+                        }
+                        if jira_item_type == "Epic":
+                            subissue_dict['issuetype'] = {'name':'Task'}
+                            subissue_dict['customfield_10014'] = new_issue.key
+                        else:
+                            subissue_dict['issuetype'] = {'name': 'Sub-task'}
+                            subissue_dict['parent'] = {'key':new_issue.key}
+                        children.append(subissue_dict)
 
-            if children:
-                jira_client.create_issues(field_list=children)
+                if children:
+                    jira_client.create_issues(field_list=children)
 
+            print("Created {}/browse/{}".format(jira.server,new_issue.key))
+            converterd_cards += 1
 
-
-        print("Created {}/browse/{}".format(jira.server,new_issue.key))
-        converterd_cards += 1
-        # except:
-        #     print("Error converting card: {}".format(jira_item_id))
-        #     failed_conversion += 1
+        except:
+            print("Error converting card: {}".format(jira_item_id))
+            failed_conversion += 1
 
     print("")
 
@@ -256,10 +259,8 @@ for card in the_board.open_cards():
 
 print ("Found {} Cards to convert to {} JIRA Project".format(len(the_board_cards),dest_jira_project))
 
-# for card in the_board_cards:
-#     convert_to_jira(card)
-
-convert_to_jira(the_board_cards[6])
+for card in the_board_cards:
+    convert_to_jira(card)
 
 print("Convertion Report:")
 print("\t{} Cards Skipped".format(skipped_cards))
