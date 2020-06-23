@@ -14,18 +14,18 @@ from jira_api import jira_api
 # All the board current have access to
 the_boards = {}
 the_board_lanes = {}
-the_board_members = {}
 the_board_cards = []
 
 skipped_cards       = 0
 converterd_cards    = 0
 failed_conversion   = 0
 
-# Lot of Hardcoding for now
 # The Goal is to get all the cards from Trello Board A and import then into JIRA Project J
 
-src_trello_board = "Foundations Backlog"
-dest_jira_project= "FS"
+src_trello_board = ""
+src_bug_id = ""
+src_bug_lane = ""
+dest_jira_project= ""
 
 # This Label means this is an Epic
 epic_label = "Roadmap Item"
@@ -75,14 +75,11 @@ labels_cleanup = [  "General Distro",
 #Initialize Trello API Token
 trello = trello_api()
 jira = jira_api()
-
-#TODO Catch error opening Trello here
-trello_client = TrelloClient(api_key=trello.key,token=trello.token)
 jira_client = JIRA(jira.server,basic_auth=(jira.login,jira.token))
+trello_client = TrelloClient(api_key=trello.key,token=trello.token)
 
 def convert_to_jira(card):
-    global skipped_cards, converterd_cards, failed_conversion
-
+    global skipped_cards, converterd_cards, failed_conversion, the_board_lanes, dest_jira_project
     print("Converting {}".format(card.name))
 
     if "- 8< -" in card.name:
@@ -109,8 +106,12 @@ def convert_to_jira(card):
     jira_item_components = []
     if lanes_to_components:
         for key in lanes_to_components:
-            if key in the_board_lanes[card.list_id]:
-                jira_item_components.append({"name":lanes_to_components[key]})        
+            if the_board_lanes:
+                if key in the_board_lanes[card.list_id]:
+                    jira_item_components.append({"name":lanes_to_components[key]})        
+            else:
+                if key in src_bug_lane:
+                    jira_item_components.append({"name":lanes_to_components[key]})        
     
     # Figure out component based on label and remove label
     if labels_to_components:
@@ -153,7 +154,7 @@ def convert_to_jira(card):
         "project = \"{}\" AND trello_card = \"{}\"".format(dest_jira_project,jira_item_id))
 
     if already_imported:
-        print("Item {}: already imported, Skipping")
+        print("Item : already imported, Skipping")
         skipped_cards += 1
     else:
         new_issue = None
@@ -236,37 +237,80 @@ def convert_to_jira(card):
     print("")
 
 
-# Get the list of boards available to current user
-for board in trello_client.list_boards():
-    the_boards[board.name] = board.id
+def usage():
+    print("usage:   trello-to-jira -b,--board <BOARD> -j,--jira <JIRA PROJECT>")
+    # print("         trello-to-jira -i,--bug <BugID> -j,--jira <JIRA PROJECT>")
+    print("")
+    print("for ex:  trello-to-jira --board \'TEAM 2020\' --jira FA")
+    # print("for ex:  trello-to-jira --bug 5ec3cc7aa1d4f2274fc3c97a --jira FA")
 
-# The board we care about
-# TODO: Check something went wrong
-the_board = trello_client.get_board(the_boards[src_trello_board])
+def main():
+    global skipped_cards, converterd_cards, failed_conversion, the_board_lanes, dest_jira_project
 
-# Capture the board members in a dictionary
-for member in the_board.get_members():
-    the_board_members[member.full_name] = member.id
+    skipped_cards       = 0
+    converterd_cards    = 0
+    failed_conversion   = 0
+    
+    parser = OptionParser(
+        usage='Usage: %prog [options]')
+    
+    parser.add_option(
+        '-b','--board', dest='src_board',help='trello board to convert')
+    parser.add_option(
+        '-i','--bug', dest='src_bug',help='trello bug to convert')
+    parser.add_option(
+        '-j','--jira', dest='dst_jira',help='receviver jira project')
+ 
+    opts, args = parser.parse_args()
 
-# Pick The Board Open Lanes
-for lane in the_board.get_lists('open'):
-    the_board_lanes[lane.id] = lane.name
+    src_trello_board = opts.src_board
+    src_bug_id = opts.src_bug
+    dest_jira_project = opts.dst_jira
+    if len(sys.argv) != 5:
+        usage()
+        sys.exit(1)
+    
+    
+    # Get the list of boards available to current user
+    for board in trello_client.list_boards():
+        the_boards[board.name] = board.id
 
-# Capture all the cards from active lane into a dictionary
-for card in the_board.open_cards():
-    if card.list_id in the_board_lanes.keys():
-        the_board_cards.append(card)
+    # The board we care about
+    # TODO: Check something went wrong
+    if src_trello_board:
+        try:
+            the_board = trello_client.get_board(the_boards[src_trello_board])
+            # Pick The Board Open Lanes
+            for lane in the_board.get_lists('open'):
+                the_board_lanes[lane.id] = lane.name
 
-print ("Found {} Cards to convert to {} JIRA Project".format(len(the_board_cards),dest_jira_project))
+            # Capture all the cards from active lane into a dictionary
+            for card in the_board.open_cards():
+                if card.list_id in the_board_lanes.keys():
+                    the_board_cards.append(card)
+        
+        except KeyError:
+            print("Board <{}> can't found, please select one of these boards:".format(src_trello_board))
+            for board in the_boards.keys(): print(board)
+            sys.exit(1)
+    
+    if src_bug_id:
+        trello_bug = None
+        try:
+            trello_bug = trello_client.get_card(src_bug_id)
+            src_bug_lane = trello_client.get_list(trello_bug.list_id).name
+        except:
+            print("Can't find bug with id {}".format(src_bug_id))
+            sys.exit(1)
+        convert_to_jira(trello_bug)
+    else:
+        print ("Found {} Cards to convert to {} JIRA Project".format(len(the_board_cards),dest_jira_project))
+        for card in the_board_cards:
+            convert_to_jira(card)
 
-for card in the_board_cards:
-    convert_to_jira(card)
+    print("Convertion Report:")
+    print("\t{} Cards Skipped".format(skipped_cards))
+    print("\t{} Cards Converted".format(converterd_cards))
+    print("\t{} Failed Conversion".format(failed_conversion))
 
-print("Convertion Report:")
-print("\t{} Cards Skipped".format(skipped_cards))
-print("\t{} Cards Converted".format(converterd_cards))
-print("\t{} Failed Conversion".format(failed_conversion))
-
-
-
-
+main()
