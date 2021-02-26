@@ -19,7 +19,7 @@ class jira_api():
         except (FileNotFoundError, json.JSONDecodeError):
             print('JIRA Token information file {} could not be found or parsed.'.format(self.credstore))
             print('')
-            gather_token = input('Do you want to entre your JIRA token information now? (Y/n) ')
+            gather_token = input('Do you want to enter your JIRA token information now? (Y/n) ')
             if gather_token == 'n':
                 return 1
             self.server = input('Please enter your jira server address : ')
