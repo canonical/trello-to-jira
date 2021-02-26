@@ -17,3 +17,7 @@ Trello Attributes   to      JIRA Attributes
     Labels          >>      Type (Epic/Task)    
     Lane            >>      Components          
     Link            >>      Link
+    Checklist       >>      sub tasks
+      * the importer will turn the first checklist into sub tasks
+    Comments        >>      Comments 
+      * All comments will be from the importer but will include the original commentor and timestamp
